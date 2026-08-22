@@ -1,0 +1,83 @@
+{
+  "keys": {
+    "owner": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  "tests": [
+    {
+      "name": "redeem works",
+      "inputs": [
+        {
+          "actor": "Ticket",
+          "state": {
+            "owner": {
+              "key_hash": "owner"
+            },
+            "serial": 7,
+            "redeemed": 0
+          },
+          "entry": "redeem",
+          "args": [
+            {
+              "sign": "owner"
+            },
+            {
+              "pubkey": "owner"
+            }
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "actor": "Ticket",
+          "state": {
+            "owner": {
+              "key_hash": "owner"
+            },
+            "serial": 7,
+            "redeemed": 1
+          }
+        }
+      ],
+      "expect": "accept"
+    },
+    {
+      "name": "cannot redeem twice",
+      "inputs": [
+        {
+          "actor": "Ticket",
+          "state": {
+            "owner": {
+              "key_hash": "owner"
+            },
+            "serial": 7,
+            "redeemed": 1
+          },
+          "entry": "redeem",
+          "args": [
+            {
+              "sign": "owner"
+            },
+            {
+              "pubkey": "owner"
+            }
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "actor": "Ticket",
+          "state": {
+            "owner": {
+              "key_hash": "owner"
+            },
+            "serial": 7,
+            "redeemed": 1
+          }
+        }
+      ],
+      "expect": {
+        "reject": "Ticket::redeem"
+      }
+    }
+  ]
+}

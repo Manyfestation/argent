@@ -16,6 +16,7 @@ mod compiler;
 pub mod error;
 pub mod inspect;
 pub mod routing;
+pub mod testing;
 
 pub use error::{ArgentError, Result};
 

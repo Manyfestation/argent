@@ -52,6 +52,35 @@ use thiserror::Error;
 
 pub type BuilderResult<T> = std::result::Result<T, BuilderError>;
 
+/// The consensus script result of evaluating a fully constructed Argent transaction.
+#[derive(Debug)]
+pub enum TxOutcome {
+    Accepted(Transaction),
+    Rejected(ScriptFailure),
+}
+
+/// Argent metadata for the input script that rejected a transaction.
+#[derive(Debug)]
+pub enum FailedScript {
+    /// A generated Argent actor script, with the exact scripts used during execution.
+    Actor { actor: ActorPath, entry: String, action_script: Vec<u8>, redeem_script: Vec<u8> },
+    /// A caller-supplied ordinary input script.
+    ///
+    /// Its signature and locking scripts remain available through the transaction
+    /// and UTXO entry at [`ScriptFailure::input_index`].
+    Ordinary,
+}
+
+/// Exact replay material for a transaction rejected by an input script.
+#[derive(Debug)]
+pub struct ScriptFailure {
+    pub transaction: Transaction,
+    pub entries: Vec<UtxoEntry>,
+    pub input_index: usize,
+    pub script: FailedScript,
+    pub source: TxScriptError,
+}
+
 /// Source-level entrypoint argument accepted by `TxBuilder`.
 ///
 /// Plain values lower directly to Silverscript ABI values. Actor values name an
@@ -1805,9 +1834,15 @@ pub fn execute_input_with_covenants(tx: &Transaction, entries: Vec<UtxoEntry>, i
     measure_input_script_units_with_covenants(&populated, input_idx, &sig_cache, &reused_values, &cov_ctx).map(|_| ())
 }
 
-/// Execute every covenant input, commit its measured compute budget, and check
-/// the finalized transaction against the consensus non-contextual mass limits.
-pub fn execute_transaction_with_covenants(tx: &mut Transaction, entries: Vec<UtxoEntry>) -> BuilderResult<()> {
+pub(crate) enum TransactionScriptOutcome {
+    Accepted,
+    Rejected { entries: Vec<UtxoEntry>, input_index: usize, source: TxScriptError },
+}
+
+pub(crate) fn evaluate_transaction_with_covenants(
+    tx: &mut Transaction,
+    entries: Vec<UtxoEntry>,
+) -> BuilderResult<TransactionScriptOutcome> {
     if tx.version != TX_VERSION_TOCCATA {
         return Err(BuilderError::UnsupportedTransactionVersion { expected: TX_VERSION_TOCCATA, found: tx.version });
     }
@@ -1821,11 +1856,19 @@ pub fn execute_transaction_with_covenants(tx: &mut Transaction, entries: Vec<Utx
         let populated = PopulatedTransaction::new(tx, entries);
         let cov_ctx = CovenantsContext::from_tx(&populated).map_err(TxScriptError::from)?;
         let mut used_script_units = Vec::with_capacity(tx.inputs.len());
+        let mut rejection = None;
         for input_index in 0..tx.inputs.len() {
-            let script_units =
-                measure_input_script_units_with_covenants(&populated, input_index, &sig_cache, &reused_values, &cov_ctx)
-                    .map_err(|source| BuilderError::InputScript { input_index, source })?;
-            used_script_units.push(script_units);
+            match measure_input_script_units_with_covenants(&populated, input_index, &sig_cache, &reused_values, &cov_ctx) {
+                Ok(script_units) => used_script_units.push(script_units),
+                Err(source) => {
+                    rejection = Some((input_index, source));
+                    break;
+                }
+            }
+        }
+        drop(cov_ctx);
+        if let Some((input_index, source)) = rejection {
+            return Ok(TransactionScriptOutcome::Rejected { entries: populated.entries, input_index, source });
         }
         used_script_units
     };
@@ -1845,7 +1888,16 @@ pub fn execute_transaction_with_covenants(tx: &mut Transaction, entries: Vec<Utx
     if masses.transient_mass > limits.transient {
         return Err(BuilderError::TransientMassLimitExceeded { transient_mass: masses.transient_mass, limit: limits.transient });
     }
-    Ok(())
+    Ok(TransactionScriptOutcome::Accepted)
+}
+
+/// Execute every covenant input, commit its measured compute budget, and check
+/// the finalized transaction against the consensus non-contextual mass limits.
+pub fn execute_transaction_with_covenants(tx: &mut Transaction, entries: Vec<UtxoEntry>) -> BuilderResult<()> {
+    match evaluate_transaction_with_covenants(tx, entries)? {
+        TransactionScriptOutcome::Accepted => Ok(()),
+        TransactionScriptOutcome::Rejected { input_index, source, .. } => Err(BuilderError::InputScript { input_index, source }),
+    }
 }
 
 fn measure_input_script_units_with_covenants(

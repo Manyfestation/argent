@@ -29,7 +29,10 @@ use kaspa_consensus_core::{
         TransactionOutput, UtxoEntry,
     },
 };
-use kaspa_txscript::{opcodes::codes::OpTrue, parse_script, pay_to_script_hash_signature_script_with_flags};
+use kaspa_txscript::{
+    opcodes::codes::{OpFalse, OpTrue},
+    parse_script, pay_to_script_hash_signature_script_with_flags,
+};
 use secp256k1::{Keypair, Secp256k1, SecretKey};
 
 static ARTIFACT_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -289,9 +292,44 @@ fn context_entry_call_accepts_user_args_only() {
         input_utxo,
         0,
     );
-    let err = builder.build(&context).expect_err("user must not provide hidden prefix/suffix witnesses");
+    let err = builder.evaluate(&context).expect_err("invalid authored arguments are a test setup error");
 
     assert!(matches!(err, BuilderError::Codec(CodecError::WrongArgumentCount { .. })));
+
+    let err = builder.build(&context).expect_err("build preserves setup-error behavior");
+
+    assert!(matches!(err, BuilderError::Codec(CodecError::WrongArgumentCount { .. })));
+}
+
+#[test]
+fn evaluate_reports_ordinary_input_rejection_without_actor_metadata() {
+    let artifact = tickets_artifact();
+    let builder = TxBuilder::new(&artifact).expect("builder accepts artifact");
+    let outpoint = TransactionOutpoint::new(TransactionId::from_bytes([0x43; 32]), 0);
+    let utxo = UtxoEntry::new(1_000, ScriptPublicKey::new(0, vec![OpFalse].into()), 0, false, None);
+    let callback_calls = Cell::new(0);
+    let context = TxContext::new().input(
+        outpoint,
+        utxo.clone(),
+        InputSigScript::with_transaction(|_, _| {
+            callback_calls.set(callback_calls.get() + 1);
+            Vec::new()
+        }),
+        0,
+    );
+
+    let failure = match builder.evaluate(&context).expect("ordinary script execution is an outcome") {
+        TxOutcome::Rejected(failure) => failure,
+        TxOutcome::Accepted(_) => panic!("false ordinary input script must reject"),
+    };
+    assert_eq!(callback_calls.get(), 1, "replay capture must not rerun signature-script callbacks");
+    assert_eq!(failure.input_index, 0);
+    assert!(matches!(failure.script, FailedScript::Ordinary));
+    assert_eq!(failure.entries, vec![utxo]);
+
+    let err = builder.build(&context).expect_err("build preserves ordinary script rejection as an error");
+    assert_eq!(callback_calls.get(), 2, "build performs one fresh evaluation");
+    assert!(matches!(err, BuilderError::InputScript { input_index: 0, .. }));
 }
 
 #[test]
@@ -772,16 +810,37 @@ fn context_executes_single_actor_self_consume_without_template_witnesses() {
         .actor_input("Counter", source_state.clone(), "merge", source_outpoint, source_utxo.clone(), 0)
         .actor_input("Counter", other_state.clone(), "hold", other_outpoint, other_utxo.clone(), 0)
         .actor_output("Counter", next_state, CovenantBinding::new(0, covenant_id), source_value + other_value);
-    let transaction = builder.build(&context).expect("single-actor self-consume executes");
+    let transaction = match builder.evaluate(&context).expect("single-actor self-consume evaluates") {
+        TxOutcome::Accepted(transaction) => transaction,
+        TxOutcome::Rejected(failure) => panic!("valid transaction rejected: {}", failure.source),
+    };
+    assert_eq!(builder.build(&context).expect("build accepts the same transaction"), transaction);
     assert_eq!(transaction.inputs.len(), 2);
     assert_eq!(transaction.outputs.len(), 1);
     assert!(transaction.inputs.iter().all(|input| input.compute_commit.compute_budget().is_some()));
 
     let wrong_state = TxContext::new()
-        .actor_input("Counter", source_state, "merge", source_outpoint, source_utxo, 0)
-        .actor_input("Counter", other_state, "hold", other_outpoint, other_utxo, 0)
+        .actor_input("Counter", source_state, "merge", source_outpoint, source_utxo.clone(), 0)
+        .actor_input("Counter", other_state, "hold", other_outpoint, other_utxo.clone(), 0)
         .actor_output("Counter", count_state(11), CovenantBinding::new(0, covenant_id), source_value + other_value);
-    let err = builder.build(&wrong_state).expect_err("merge must read and add the consumed Counter state");
+    let failure = match builder.evaluate(&wrong_state).expect("script rejection is an outcome") {
+        TxOutcome::Rejected(failure) => failure,
+        TxOutcome::Accepted(_) => panic!("merge accepted the wrong output state"),
+    };
+    assert_eq!(failure.input_index, 0);
+    assert_eq!(failure.entries, vec![source_utxo, other_utxo]);
+    let signature_script = &failure.transaction.inputs[0].signature_script;
+    match &failure.script {
+        FailedScript::Actor { actor, entry, action_script, redeem_script } => {
+            assert_eq!(actor, &ActorPath::primary("Counter"));
+            assert_eq!(entry, "merge");
+            assert_eq!(signature_script.get(..action_script.len()), Some(action_script.as_slice()));
+            assert_eq!(p2sh_redeem_script(signature_script).as_slice(), redeem_script.as_slice());
+        }
+        FailedScript::Ordinary => panic!("Counter input must retain actor replay metadata"),
+    }
+
+    let err = builder.build(&wrong_state).expect_err("build preserves script rejection as an error");
     assert!(matches!(err, BuilderError::InputScript { input_index: 0, .. }));
 }
 
@@ -2007,7 +2066,24 @@ fn context_builds_observed_co_spend_with_transaction_dependent_args() {
         )
         .actor_output("Controller", controller_next, CovenantBinding::new(0, controller_covenant_id), 4_000)
         .actor_output("asset_app::Asset", asset_next, CovenantBinding::new(1, asset_covenant_id), 2_000);
-    let err = builder.build(&invalid_signature).expect_err("invalid observed co-spend signature must fail");
+    let failure = match builder.evaluate(&invalid_signature).expect("invalid signature is a script outcome") {
+        TxOutcome::Rejected(failure) => failure,
+        TxOutcome::Accepted(_) => panic!("invalid observed co-spend signature must reject"),
+    };
+    assert_eq!(failure.input_index, 1);
+    assert_eq!(failure.entries.len(), 2);
+    match &failure.script {
+        FailedScript::Actor { actor, entry, action_script, redeem_script } => {
+            assert_eq!(actor, &ActorPath::qualified("asset_app", "Asset"));
+            assert_eq!(entry, "transfer");
+            let signature_script = &failure.transaction.inputs[1].signature_script;
+            assert_eq!(signature_script.get(..action_script.len()), Some(action_script.as_slice()));
+            assert_eq!(p2sh_redeem_script(signature_script).as_slice(), redeem_script.as_slice());
+        }
+        FailedScript::Ordinary => panic!("Asset input must retain actor replay metadata"),
+    }
+
+    let err = builder.build(&invalid_signature).expect_err("build preserves multi-input script rejection as an error");
     assert!(matches!(err, BuilderError::InputScript { input_index: 1, .. }), "unexpected error: {err}");
 }
 

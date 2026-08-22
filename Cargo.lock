@@ -118,6 +118,7 @@ dependencies = [
  "argent-runtime",
  "blake2b_simd",
  "colored",
+ "debugger-session",
  "kaspa-consensus-core",
  "kaspa-txscript",
  "kaspa-txscript-errors",
@@ -1204,6 +1205,20 @@ dependencies = [
  "dispatch2",
  "nix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "debugger-session"
+version = "0.1.0"
+source = "git+https://github.com/kaspanet/silverscript?rev=14dce9a5ce8769cdfbd0c8965f8764fa9c325067#14dce9a5ce8769cdfbd0c8965f8764fa9c325067"
+dependencies = [
+ "faster-hex 0.10.0",
+ "kaspa-consensus-core",
+ "kaspa-txscript",
+ "kaspa-txscript-errors",
+ "serde",
+ "serde_json",
+ "silverscript-lang",
 ]
 
 [[package]]

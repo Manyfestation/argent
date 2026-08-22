@@ -16,9 +16,9 @@ use silverscript_abi::encode_entry_sig_script;
 
 use crate::{
     ActorInput, ActorPath, Artifact, ArtifactValue, BuilderError, BuilderResult, ContextInput, ContextOutput, ContractRef, EntryArgs,
-    HiddenArgContexts, InputSigScript, ObservedCovenantContext, ObservedInput, ObservedOutput, OrdinaryInput, OutputCovenant,
-    OutputOwner, OutputState, Side, SpawnedActorContext, StateContext, TxBuilder, TxContext, artifact_app_alias,
-    covenant_engine_flags, execute_transaction_with_covenants,
+    FailedScript, HiddenArgContexts, InputSigScript, ObservedCovenantContext, ObservedInput, ObservedOutput, OrdinaryInput,
+    OutputCovenant, OutputOwner, OutputState, ScriptFailure, Side, SpawnedActorContext, StateContext, TransactionScriptOutcome,
+    TxBuilder, TxContext, TxOutcome, artifact_app_alias, covenant_engine_flags, evaluate_transaction_with_covenants,
 };
 
 type ResolvedObservations = BTreeMap<String, ObservedCovenantContext>;
@@ -28,6 +28,31 @@ type ResolvedSpawnActors = BTreeMap<(String, String), SpawnedActorContext>;
 struct ResolvedEntryArgs {
     values: Vec<ArtifactValue>,
     template_selectors: BTreeMap<String, String>,
+}
+
+enum PreparedScript {
+    Actor { actor: ActorPath, entry: String, action_end: usize, redeem_start: usize },
+    Ordinary,
+}
+
+impl PreparedScript {
+    fn into_failed(self, signature_script: &[u8]) -> FailedScript {
+        match self {
+            Self::Actor { actor, entry, action_end, redeem_start } => {
+                assert!(action_end <= redeem_start, "redeem-script push follows the action script");
+                let action_script = signature_script
+                    .get(..action_end)
+                    .expect("prepared action-script span belongs to the finalized signature script")
+                    .to_vec();
+                let redeem_script = signature_script
+                    .get(redeem_start..)
+                    .expect("prepared redeem-script span belongs to the finalized signature script")
+                    .to_vec();
+                FailedScript::Actor { actor, entry, action_script, redeem_script }
+            }
+            Self::Ordinary => FailedScript::Ordinary,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -632,11 +657,13 @@ impl<'artifact> TxBuilder<'artifact> {
         Ok(())
     }
 
-    /// Build, validate, and finalize the transaction described by `context`.
+    /// Build and evaluate the transaction described by `context`.
     ///
     /// Artifact-local routes and concrete observed actors supply all
-    /// compiler-generated witness arguments.
-    pub fn build(&self, context: &TxContext<'_>) -> BuilderResult<Transaction> {
+    /// compiler-generated witness arguments. A transaction rejected by one of
+    /// its input scripts is returned as an outcome; setup, shape, encoding, and
+    /// finalization failures remain builder errors.
+    pub fn evaluate(&self, context: &TxContext<'_>) -> BuilderResult<TxOutcome> {
         let mut context = self.bind_context(context)?;
         let unsigned = self.unsigned_transaction(&context)?;
         self.validate_leader_actor_input_counts(&context)?;
@@ -645,9 +672,10 @@ impl<'artifact> TxBuilder<'artifact> {
         self.resolve_context_spawns(&mut context)?;
         self.resolve_context_hidden_args(&mut context)?;
         let mut signature_scripts = Vec::with_capacity(context.inputs.len());
+        let mut prepared_scripts = Vec::with_capacity(context.inputs.len());
 
         for (input_index, input) in context.inputs.iter().enumerate() {
-            let signature_script = match input {
+            let (signature_script, prepared_script) = match input {
                 ResolveInput::Actor(input) => {
                     let mut args = input.args.as_ref().expect("argument resolution precedes sigscript construction").values.clone();
                     args.extend(
@@ -658,21 +686,35 @@ impl<'artifact> TxBuilder<'artifact> {
                             .iter()
                             .cloned(),
                     );
-                    let abi_script = encode_entry_sig_script(&input.artifact.sil_abi, input.contract, input.sil_entry, &args)?;
-                    pay_to_script_hash_signature_script_with_flags(
-                        self.redeem_script_for_contract(input.contract_ref(), input.source.state.clone())?,
-                        abi_script,
-                        covenant_engine_flags(),
-                    )?
+                    let action_script = encode_entry_sig_script(&input.artifact.sil_abi, input.contract, input.sil_entry, &args)?;
+                    let action_end = action_script.len();
+                    let redeem_script = self.redeem_script_for_contract(input.contract_ref(), input.source.state.clone())?;
+                    let redeem_len = redeem_script.len();
+                    let signature_script =
+                        pay_to_script_hash_signature_script_with_flags(redeem_script, action_script, covenant_engine_flags())?;
+                    let redeem_start =
+                        signature_script.len().checked_sub(redeem_len).expect("P2SH signature script contains its redeem script");
+                    (
+                        signature_script,
+                        PreparedScript::Actor {
+                            actor: input.source.actor.clone(),
+                            entry: input.source.entry.name.clone(),
+                            action_end,
+                            redeem_start,
+                        },
+                    )
                 }
                 ResolveInput::Ordinary(input) => match &input.signature_script {
-                    InputSigScript::Static(script) => script.clone(),
+                    InputSigScript::Static(script) => (script.clone(), PreparedScript::Ordinary),
                     InputSigScript::WithTransaction(build) => {
-                        build(&unsigned, input_index).map_err(|source| BuilderError::InputSigScriptCallback { input_index, source })?
+                        let signature_script = build(&unsigned, input_index)
+                            .map_err(|source| BuilderError::InputSigScriptCallback { input_index, source })?;
+                        (signature_script, PreparedScript::Ordinary)
                     }
                 },
             };
             signature_scripts.push(signature_script);
+            prepared_scripts.push(prepared_script);
         }
 
         let mut transaction = unsigned.tx;
@@ -681,8 +723,28 @@ impl<'artifact> TxBuilder<'artifact> {
         }
         let entries =
             unsigned.entries.into_iter().map(|entry| entry.expect("context transaction inputs always carry UTXO entries")).collect();
-        execute_transaction_with_covenants(&mut transaction, entries)?;
-        Ok(transaction)
+        match evaluate_transaction_with_covenants(&mut transaction, entries)? {
+            TransactionScriptOutcome::Accepted => Ok(TxOutcome::Accepted(transaction)),
+            TransactionScriptOutcome::Rejected { entries, input_index, source } => {
+                let prepared = prepared_scripts.into_iter().nth(input_index).expect("script execution only reports an existing input");
+                let signature_script = &transaction.inputs[input_index].signature_script;
+                let script = prepared.into_failed(signature_script);
+                Ok(TxOutcome::Rejected(ScriptFailure { transaction, entries, input_index, script, source }))
+            }
+        }
+    }
+
+    /// Build, validate, and finalize the transaction described by `context`.
+    ///
+    /// This compatibility wrapper preserves the original behavior of reporting
+    /// script rejection as [`BuilderError::InputScript`].
+    pub fn build(&self, context: &TxContext<'_>) -> BuilderResult<Transaction> {
+        match self.evaluate(context)? {
+            TxOutcome::Accepted(transaction) => Ok(transaction),
+            TxOutcome::Rejected(failure) => {
+                Err(BuilderError::InputScript { input_index: failure.input_index, source: failure.source })
+            }
+        }
     }
 }
 
