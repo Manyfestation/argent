@@ -112,6 +112,17 @@ The report summarizes actor script, state, and template sizes, static opcode
 counts, entry arguments and generated witnesses, route metadata, and
 signature-script size estimates.
 
+Format Argent sources in place (whitespace only: indentation, punctuation
+spacing, blank lines; strings and comments are never touched), or verify them
+in CI with `--check`:
+
+```sh
+cargo run --bin argentc -- fmt examples std
+cargo run --bin argentc -- fmt examples std --check
+```
+
+The VS Code extension's Format Document uses the same rules.
+
 Generated `.sil` files compile as ordinary Silverscript. Within each contract,
 Silverscript provides the types, expressions, functions, arrays, loops, and
 control flow, then performs the final type checking and Kaspa Script

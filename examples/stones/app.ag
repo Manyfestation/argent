@@ -12,4 +12,3 @@ app Stones {
     actor StonesGame;
     actor StonesSettle;
 }
-

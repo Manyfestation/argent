@@ -39,17 +39,26 @@ Features:
 - The editor indexer is tolerant of unfinished function and actor bodies.
 - `std::core` is indexed as an imported Argent module. Import paths and
   imported functions navigate to the compiler's standard-library source.
+- Document formatting (Format Document, format-on-save) canonicalizes
+  whitespace: four-space indentation by bracket depth with continuation-line
+  handling, comma/semicolon/brace spacing, trailing whitespace, and blank-line
+  collapsing. Strings and comments are never touched, and lines are never
+  wrapped or joined. The same rules are available on the command line as
+  `argentc fmt <file.ag|dir>... [--check]`; the two implementations
+  (`formatter.js` here, `src/fmt.rs` in the compiler) are kept in sync.
+- Pressing Enter auto-indents after unclosed brackets and continues `///` and
+  `/** ... */` doc comments.
 
 Install locally by symlinking the unpacked extension from the repo root, then reload VS Code:
 
 ```bash
 mkdir -p ~/.vscode/extensions
-ln -s "$PWD/vscode/argent-syntax" ~/.vscode/extensions/kaspanet.argent-syntax-0.1.0
+ln -s "$PWD/vscode/argent-syntax" ~/.vscode/extensions/kaspanet.argent-syntax-0.2.0
 ```
 
 If the workspace has a manual `files.associations` entry for `*.ag`, set it to `argent` or remove it.
 
-Run the dependency-free scanner tests with:
+Run the dependency-free scanner and formatter tests with:
 
 ```bash
 cd vscode/argent-syntax

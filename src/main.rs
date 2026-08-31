@@ -3,8 +3,9 @@
 //! CLI commands delegate to the public library operations.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use argent::fmt::format_source;
 use argent::inspect::{inspect_path, render_report};
 use argent::{ArgentError, Result, build_file, build_file_app_bundle};
 
@@ -29,6 +30,7 @@ fn run() -> Result<()> {
     match command.as_str() {
         "build" => build(args),
         "inspect" => inspect(args),
+        "fmt" => fmt(args),
         _ => Err(ArgentError::new(format!("unknown command `{command}`"))),
     }
 }
@@ -75,8 +77,81 @@ fn inspect(args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+fn fmt(args: Vec<String>) -> Result<()> {
+    let mut check = false;
+    let mut inputs = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "--check" => check = true,
+            _ => inputs.push(PathBuf::from(arg)),
+        }
+    }
+    if inputs.is_empty() {
+        return Err(ArgentError::new("usage: argentc fmt <file.ag|dir>... [--check]"));
+    }
+
+    let mut files = Vec::new();
+    for input in &inputs {
+        collect_argent_files(input, &mut files)?;
+    }
+
+    let mut unformatted = Vec::new();
+    for file in files {
+        let source = std::fs::read_to_string(&file).map_err(|err| ArgentError::at(&file, format!("cannot read source: {err}")))?;
+        let formatted = format_source(&source);
+        if formatted == source {
+            continue;
+        }
+        if check {
+            unformatted.push(file);
+        } else {
+            std::fs::write(&file, formatted).map_err(|err| ArgentError::at(&file, format!("cannot write source: {err}")))?;
+        }
+    }
+
+    if !unformatted.is_empty() {
+        for file in &unformatted {
+            eprintln!("would reformat {}", file.display());
+        }
+        return Err(ArgentError::new(format!("{} file(s) need formatting", unformatted.len())));
+    }
+    Ok(())
+}
+
+/// Collects an explicit file argument as-is; directories are walked
+/// recursively for `.ag` sources, skipping hidden and build directories.
+fn collect_argent_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    let metadata = std::fs::metadata(path).map_err(|err| ArgentError::at(path, format!("cannot read path: {err}")))?;
+    if !metadata.is_dir() {
+        files.push(path.to_path_buf());
+        return Ok(());
+    }
+
+    let mut entries = std::fs::read_dir(path)
+        .map_err(|err| ArgentError::at(path, format!("cannot read directory: {err}")))?
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|err| ArgentError::at(path, format!("cannot read directory: {err}")))?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || name == "target" || name == "node_modules" {
+            continue;
+        }
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            collect_argent_files(&entry_path, files)?;
+        } else if name.ends_with(".ag") {
+            files.push(entry_path);
+        }
+    }
+    Ok(())
+}
+
 fn print_usage() {
     eprintln!("usage:");
     eprintln!("  argentc build <app.ag> [--app <name>] [--out <dir>]");
     eprintln!("  argentc inspect <build-dir|artifact.json>");
+    eprintln!("  argentc fmt <file.ag|dir>... [--check]");
 }

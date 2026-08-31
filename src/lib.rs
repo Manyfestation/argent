@@ -14,6 +14,7 @@ pub mod builder;
 pub mod codec;
 mod compiler;
 pub mod error;
+pub mod fmt;
 pub mod inspect;
 pub mod routing;
 

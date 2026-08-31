@@ -13,6 +13,7 @@ const {
   scanDocument,
   standardModuleRelativePath,
 } = require('./language-service');
+const { formatSource } = require('./formatter');
 
 const EXTENSION_DIRECTORY = fs.realpathSync(__dirname);
 
@@ -477,6 +478,17 @@ function activate(context) {
         index.invalidate(event.document.uri);
         semanticChanges.fire();
       }
+    }),
+    vscode.languages.registerDocumentFormattingEditProvider(selector, {
+      provideDocumentFormattingEdits(document) {
+        const original = document.getText();
+        const formatted = formatSource(original);
+        if (formatted === original) {
+          return [];
+        }
+        const fullRange = new vscode.Range(document.positionAt(0), document.positionAt(original.length));
+        return [vscode.TextEdit.replace(fullRange, formatted)];
+      },
     }),
     vscode.languages.registerCompletionItemProvider(selector, {
       async provideCompletionItems(document, position) {
