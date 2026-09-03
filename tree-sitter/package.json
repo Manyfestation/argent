@@ -1,0 +1,37 @@
+{
+  "name": "tree-sitter-argent",
+  "version": "0.1.0",
+  "description": "Argent language grammar",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/argent-lang/argent.git"
+  },
+  "license": "ISC",
+  "author": {
+    "name": "Argent-lang developers"
+  },
+  "main": "bindings/node",
+  "types": "bindings/node",
+  "keywords": [
+    "argent",
+    "incremental",
+    "parsing",
+    "tree-sitter"
+  ],
+  "files": [
+    "grammar.js",
+    "tree-sitter.json",
+    "binding.gyp",
+    "bindings/node/*",
+    "queries/*",
+    "src/**"
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "0.26.5"
+  },
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test"
+  }
+}

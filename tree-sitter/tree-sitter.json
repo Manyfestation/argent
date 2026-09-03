@@ -1,0 +1,37 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "argent",
+      "camelcase": "Argent",
+      "title": "Argent",
+      "scope": "source.argent",
+      "file-types": ["ag"],
+      "injection-regex": "^argent$",
+      "class-name": "TreeSitterArgent"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "ISC",
+    "description": "Argent language grammar",
+    "authors": [
+      {
+        "name": "Argent-lang developers"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/argent-lang/argent"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": false,
+    "java": false,
+    "node": false,
+    "python": false,
+    "rust": true,
+    "swift": false,
+    "zig": false
+  }
+}
