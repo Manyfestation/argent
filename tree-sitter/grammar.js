@@ -484,6 +484,7 @@ export default grammar({
     primary_expression: ($) =>
       choice(
         $.parenthesized_expression,
+        $.instantiation_expression,
         $.call_expression,
         $.typed_literal,
         $.object_literal,
@@ -493,6 +494,13 @@ export default grammar({
       ),
 
     parenthesized_expression: ($) => seq("(", $.expression, ")"),
+
+    instantiation_expression: ($) =>
+      seq(
+        "new",
+        field("type", choice($.qualified_identifier, $.identifier)),
+        $.argument_list,
+      ),
 
     call_expression: ($) =>
       seq(field("function", $.type_name), $.argument_list),

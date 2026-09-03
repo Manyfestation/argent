@@ -99,6 +99,14 @@
     (base_type
       (identifier) @function)))
 
+(instantiation_expression
+  type: (identifier) @type)
+
+(instantiation_expression
+  type: (qualified_identifier
+    namespace: (identifier) @namespace
+    name: (identifier) @type))
+
 (qualified_identifier
   namespace: (identifier) @namespace
   name: (identifier) @type)
@@ -128,7 +136,7 @@
   (#eq? @variable.special "self"))
 
 ((identifier) @function.builtin
-  (#match? @function.builtin "^(Op[A-Za-z0-9_]+|blake2b|blake2bWithKey|blake3|blake3WithKey|checkMsgSig|checkMsgSigEcdsa|checkSig|checkSigEcdsa|co_spent|digest|require|sha256|state|templateHash|unrestricted)$"))
+  (#match? @function.builtin "^(Op[A-Za-z0-9_]+|ScriptPubKeyP2PK|ScriptPubKeyP2SH|ScriptPubKeyP2SHFromRedeemScript|blake2b|blake2bWithKey|blake3|blake3WithKey|checkMsgSig|checkMsgSigEcdsa|checkSig|checkSigEcdsa|co_spent|digest|length|require|sha256|signed|state|templateHash|unrestricted|unsigned)$"))
 
 [
   "actor"
@@ -151,6 +159,7 @@
   "if"
   "import"
   "inputs"
+  "new"
   "none"
   "observes"
   "outputs"

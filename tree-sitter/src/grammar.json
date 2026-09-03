@@ -2575,6 +2575,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "instantiation_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "call_expression"
         },
         {
@@ -2613,6 +2617,36 @@
         {
           "type": "STRING",
           "value": ")"
+        }
+      ]
+    },
+    "instantiation_expression": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "new"
+        },
+        {
+          "type": "FIELD",
+          "name": "type",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "qualified_identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              }
+            ]
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "argument_list"
         }
       ]
     },
