@@ -1,0 +1,22 @@
+id = "argent"
+name = "Argent"
+description = "Syntax highlighting and code completion for the Argent language."
+version = "0.1.0"
+schema_version = 1
+authors = ["Argent-lang developers"]
+repository = "https://github.com/argent-lang/argent"
+
+languages = ["languages/argent"]
+
+[grammars.argent]
+# Zed clones `repository` and compiles `path`/src/parser.c at `rev`, so `rev`
+# must be a commit that is reachable on the remote. For local grammar work,
+# temporarily point `repository` at an absolute `file://` URL of your checkout
+# (see README.md) and restore these values before committing.
+repository = "https://github.com/argent-lang/argent"
+rev = "5b891dcbce5b6591a772afc9e5936dc0e12bef81"
+path = "tree-sitter"
+
+[language_servers.argent-language-server]
+name = "Argent Language Server"
+languages = ["Argent"]

@@ -29,6 +29,7 @@ fn run() -> Result<()> {
     match command.as_str() {
         "build" => build(args),
         "inspect" => inspect(args),
+        "lsp" => lsp(args),
         _ => Err(ArgentError::new(format!("unknown command `{command}`"))),
     }
 }
@@ -75,8 +76,16 @@ fn inspect(args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+fn lsp(args: Vec<String>) -> Result<()> {
+    if !args.is_empty() {
+        return Err(ArgentError::new("usage: argentc lsp"));
+    }
+    argent::lsp::serve()
+}
+
 fn print_usage() {
     eprintln!("usage:");
     eprintln!("  argentc build <app.ag> [--app <name>] [--out <dir>]");
     eprintln!("  argentc inspect <build-dir|artifact.json>");
+    eprintln!("  argentc lsp");
 }

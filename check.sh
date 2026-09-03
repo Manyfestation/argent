@@ -53,4 +53,10 @@ else
     cargo test --workspace
 fi
 cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --manifest-path tree-sitter/Cargo.toml -- --check
+cargo test --manifest-path tree-sitter/Cargo.toml --locked
+cargo clippy --manifest-path tree-sitter/Cargo.toml --all-targets --locked -- -D warnings
+cargo fmt --manifest-path zed/argent/Cargo.toml -- --check
+cargo test --manifest-path zed/argent/Cargo.toml --locked
+cargo clippy --manifest-path zed/argent/Cargo.toml --all-targets --locked -- -D warnings
 git diff --check

@@ -1,0 +1,4 @@
+/target/
+# Zed writes the grammar checkout and compiled parser here when it installs
+# the dev extension.
+/grammars/

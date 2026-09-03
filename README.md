@@ -108,6 +108,12 @@ Inspect the compiled artifact without rebuilding it:
 cargo run --bin argentc -- inspect examples/build/tickets
 ```
 
+Editor integrations live in [`vscode/argent-syntax`](vscode/argent-syntax)
+and [`zed/argent`](zed/argent). Both provide Argent syntax highlighting and
+completion. The Zed extension uses the language server built into the compiler;
+install `argentc` with `cargo install --path . --locked` before installing the
+development extension from `zed/argent`.
+
 The report summarizes actor script, state, and template sizes, static opcode
 counts, entry arguments and generated witnesses, route metadata, and
 signature-script size estimates.
