@@ -11,8 +11,6 @@
   "author": {
     "name": "Argent-lang developers"
   },
-  "main": "bindings/node",
-  "types": "bindings/node",
   "keywords": [
     "argent",
     "incremental",
@@ -22,8 +20,6 @@
   "files": [
     "grammar.js",
     "tree-sitter.json",
-    "binding.gyp",
-    "bindings/node/*",
     "queries/*",
     "src/**"
   ],
@@ -31,7 +27,10 @@
     "tree-sitter-cli": "0.26.5"
   },
   "scripts": {
-    "generate": "tree-sitter generate",
-    "test": "tree-sitter test"
+    "generate": "npm run generate:raw && npm run sync:queries",
+    "generate:raw": "tree-sitter generate",
+    "sync:queries": "node scripts/sync-queries.mjs",
+    "build": "npm run generate && npm run build:raw",
+    "build:raw": "tree-sitter build --wasm"
   }
 }

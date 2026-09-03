@@ -133,7 +133,7 @@
 ] @type.builtin
 
 ((identifier) @variable.special
-  (#eq? @variable.special "self"))
+  (#match? @variable.special "^(self|this|tx)$"))
 
 ((identifier) @function.builtin
   (#match? @function.builtin "^(Op[A-Za-z0-9_]+|ScriptPubKeyP2PK|ScriptPubKeyP2SH|ScriptPubKeyP2SHFromRedeemScript|blake2b|blake2bWithKey|blake3|blake3WithKey|checkMsgSig|checkMsgSigEcdsa|checkSig|checkSigEcdsa|co_spent|digest|length|require|sha256|signed|state|templateHash|unrestricted|unsigned)$"))
