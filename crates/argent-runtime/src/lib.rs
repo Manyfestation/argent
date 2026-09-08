@@ -174,6 +174,12 @@ impl IntoArtifactValue for BTreeMap<String, ArtifactValue> {
     }
 }
 
+impl IntoArtifactValue for Vec<BTreeMap<String, ArtifactValue>> {
+    fn into_artifact_value(self) -> ArtifactValue {
+        ArtifactValue::Array(self.into_iter().map(ArtifactValue::Object).collect())
+    }
+}
+
 /// Build an Argent source-state object for `TxBuilder` calls.
 ///
 /// Returns a `BTreeMap<String, ArtifactValue>` keyed by Argent source field
@@ -214,6 +220,18 @@ macro_rules! state {
 /// // Builds:
 /// // vec![ArgValue::Value(ArtifactValue::Int(3)), ArgValue::Actor("Alpha".to_string())]
 /// let args = args![3, actor("Alpha")];
+/// ```
+///
+/// A vector of source-state maps becomes one array argument; a byte vector
+/// remains one bytes argument.
+///
+/// ```
+/// use argent_runtime::{args, state};
+///
+/// let next_states = vec![state! { amount: 90 }, state! { amount: 10 }];
+/// let witness = vec![0u8; 65];
+/// let arguments = args![next_states, witness];
+/// assert_eq!(arguments.len(), 2);
 /// ```
 #[macro_export]
 macro_rules! args {
@@ -2086,6 +2104,25 @@ mod tests {
                 ArgValue::Actor("Alpha".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn args_macro_converts_state_vectors_and_preserves_bytes() {
+        let first = state! { amount: 90 };
+        let second = state! { amount: 10 };
+        assert_eq!(
+            args![vec![first.clone(), second.clone()], vec![0u8, 1]],
+            vec![
+                ArgValue::Value(ArtifactValue::Array(vec![ArtifactValue::Object(first), ArtifactValue::Object(second)])),
+                ArgValue::Value(ArtifactValue::Bytes(vec![0, 1])),
+            ]
+        );
+    }
+
+    #[test]
+    fn args_macro_converts_empty_state_vectors() {
+        let states: Vec<BTreeMap<String, ArtifactValue>> = Vec::new();
+        assert_eq!(args![states], vec![ArgValue::Value(ArtifactValue::Array(Vec::new()))]);
     }
 
     #[test]
