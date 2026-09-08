@@ -174,9 +174,20 @@ impl IntoArtifactValue for BTreeMap<String, ArtifactValue> {
     }
 }
 
-impl IntoArtifactValue for Vec<BTreeMap<String, ArtifactValue>> {
+/// Explicitly convert an iterable into an ABI array.
+///
+/// Each item is converted through `IntoArtifactValue`. Wrap nested iterables in
+/// `Array` as well. Unwrapped byte vectors continue to convert into ABI bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct Array<I>(pub I);
+
+impl<I> IntoArtifactValue for Array<I>
+where
+    I: IntoIterator,
+    I::Item: IntoArtifactValue,
+{
     fn into_artifact_value(self) -> ArtifactValue {
-        ArtifactValue::Array(self.into_iter().map(ArtifactValue::Object).collect())
+        ArtifactValue::Array(self.0.into_iter().map(IntoArtifactValue::into_artifact_value).collect())
     }
 }
 
@@ -222,15 +233,15 @@ macro_rules! state {
 /// let args = args![3, actor("Alpha")];
 /// ```
 ///
-/// A vector of source-state maps becomes one array argument; a byte vector
-/// remains one bytes argument.
+/// Wrap an iterable in `Array` to pass it as one array argument; an unwrapped
+/// byte vector remains one bytes argument.
 ///
 /// ```
-/// use argent_runtime::{args, state};
+/// use argent_runtime::{Array, args, state};
 ///
 /// let next_states = vec![state! { amount: 90 }, state! { amount: 10 }];
 /// let witness = vec![0u8; 65];
-/// let arguments = args![next_states, witness];
+/// let arguments = args![Array(next_states), witness];
 /// assert_eq!(arguments.len(), 2);
 /// ```
 #[macro_export]
@@ -2107,11 +2118,11 @@ mod tests {
     }
 
     #[test]
-    fn args_macro_converts_state_vectors_and_preserves_bytes() {
+    fn args_macro_converts_wrapped_states_and_preserves_bytes() {
         let first = state! { amount: 90 };
         let second = state! { amount: 10 };
         assert_eq!(
-            args![vec![first.clone(), second.clone()], vec![0u8, 1]],
+            args![Array(vec![first.clone(), second.clone()]), vec![0u8, 1]],
             vec![
                 ArgValue::Value(ArtifactValue::Array(vec![ArtifactValue::Object(first), ArtifactValue::Object(second)])),
                 ArgValue::Value(ArtifactValue::Bytes(vec![0, 1])),
@@ -2120,9 +2131,31 @@ mod tests {
     }
 
     #[test]
-    fn args_macro_converts_empty_state_vectors() {
+    fn args_macro_converts_empty_wrapped_iterators() {
         let states: Vec<BTreeMap<String, ArtifactValue>> = Vec::new();
-        assert_eq!(args![states], vec![ArgValue::Value(ArtifactValue::Array(Vec::new()))]);
+        assert_eq!(args![Array(states.into_iter())], vec![ArgValue::Value(ArtifactValue::Array(Vec::new()))]);
+    }
+
+    #[test]
+    fn array_converts_fixed_arrays_and_iterator_adapters() {
+        assert_eq!(
+            args![Array([1i64, 2]), Array((0i64..4).filter(|value| value % 2 == 1))],
+            vec![
+                ArgValue::Value(ArtifactValue::Array(vec![ArtifactValue::Int(1), ArtifactValue::Int(2)])),
+                ArgValue::Value(ArtifactValue::Array(vec![ArtifactValue::Int(1), ArtifactValue::Int(3)])),
+            ]
+        );
+    }
+
+    #[test]
+    fn array_supports_nested_arrays_and_explicit_byte_elements() {
+        assert_eq!(
+            args![Array([Array([1u8, 2]), Array([3u8, 4])])],
+            vec![ArgValue::Value(ArtifactValue::Array(vec![
+                ArtifactValue::Array(vec![ArtifactValue::Byte(1), ArtifactValue::Byte(2)]),
+                ArtifactValue::Array(vec![ArtifactValue::Byte(3), ArtifactValue::Byte(4)]),
+            ]))]
+        );
     }
 
     #[test]
