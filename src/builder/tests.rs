@@ -700,7 +700,7 @@ fn context_executes_source_state_arguments_without_exposing_generated_fields() {
         .actor_input(
             "Note",
             initial.clone(),
-            EntryCall::new("choose_fixed").args(args![Array(state_array(&[3, 7]))]),
+            EntryCall::new("choose_fixed").args(args![state_array(&[3, 7])]),
             TransactionOutpoint::new(TransactionId::from_bytes([0x46; 32]), 0),
             fixed_utxo,
             0,
@@ -711,11 +711,12 @@ fn context_executes_source_state_arguments_without_exposing_generated_fields() {
     let dynamic_utxo = builder
         .covenant_utxo("Note", initial.clone(), input_value, 0, false, Some(covenant_id))
         .expect("dynamic-array Note UTXO builds");
+    let dynamic_states = state_array(&[2, 5, 9]);
     let dynamic = TxContext::new()
         .actor_input(
             "Note",
             initial,
-            EntryCall::new("choose_dynamic").args(args![Array(state_array(&[2, 5, 9]).into_iter())]),
+            EntryCall::new("choose_dynamic").args_with(|_, _| args![dynamic_states.as_slice()]),
             TransactionOutpoint::new(TransactionId::from_bytes([0x47; 32]), 0),
             dynamic_utxo,
             0,
