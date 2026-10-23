@@ -6,8 +6,6 @@ use crate::{
         TypeArtifact, route_template_proof_receipt_id, route_template_table_receipt_id,
     },
     codec::{CodecError, decode_hex, encode_entry_sig_script},
-    compiler::codegen::emit_build_app_linked,
-    compiler::loader::load_program,
 };
 use std::{
     cell::Cell,
@@ -33,6 +31,30 @@ use kaspa_txscript::{
     opcodes::codes::OpTrue, parse_script, pay_to_script_hash_signature_script_with_flags, script_builder::ScriptBuilder,
 };
 use secp256k1::{Keypair, Secp256k1, SecretKey};
+use silverscript_lang::ast::parse_contract_ast;
+
+fn fixture_ast(source: &str) -> serde_json::Value {
+    fn strip_spans(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                fields.retain(|name, _| !name.ends_with("span"));
+                for field in fields.values_mut() {
+                    strip_spans(field);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    strip_spans(value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut ast = serde_json::to_value(parse_contract_ast(source).expect("pinned Sil fixture parses")).expect("Sil AST serializes");
+    strip_spans(&mut ast);
+    ast
+}
 
 mod genesis_proof;
 
@@ -2180,16 +2202,16 @@ fn context_spawns_a_static_actor_from_a_linked_app() {
         "linked spawn metadata must agree with its shared actor-template witnesses"
     );
     assert_eq!(
-        fs::read_to_string(out_dir.join("sil/Launcher.sil")).expect("generated launcher Sil exists"),
-        include_str!("../../tests/fixtures/runtime/context_static_linked_spawn/Launcher.sil")
+        fixture_ast(&fs::read_to_string(out_dir.join("sil/Launcher.sil")).expect("generated launcher Sil exists")),
+        fixture_ast(include_str!("../../tests/fixtures/runtime/context_static_linked_spawn/Launcher.sil"))
     );
     assert_eq!(
-        fs::read_to_string(out_dir.join("sil/Relay.sil")).expect("generated relay Sil exists"),
-        include_str!("../../tests/fixtures/runtime/context_static_linked_spawn/Relay.sil")
+        fixture_ast(&fs::read_to_string(out_dir.join("sil/Relay.sil")).expect("generated relay Sil exists")),
+        fixture_ast(include_str!("../../tests/fixtures/runtime/context_static_linked_spawn/Relay.sil"))
     );
     assert_eq!(
-        fs::read_to_string(out_dir.join("apps/ChildApp/sil/Child.sil")).expect("generated child Sil exists"),
-        include_str!("../../tests/fixtures/runtime/context_static_linked_spawn/Child.sil")
+        fixture_ast(&fs::read_to_string(out_dir.join("apps/ChildApp/sil/Child.sil")).expect("generated child Sil exists")),
+        fixture_ast(include_str!("../../tests/fixtures/runtime/context_static_linked_spawn/Child.sil"))
     );
 
     let bundle = compiled.runtime_bundle().expect("compiled artifacts form a runtime bundle");
@@ -2892,6 +2914,82 @@ fn toy_chess_builder_redeems_route_family_and_worker_paths() {
         input_value,
     );
     assert!(builder.build(&wrong_worker).is_err(), "choose_pawn must reject an output using the wrong worker template");
+}
+
+#[test]
+fn reassigned_actor_enum_selector_executes_both_conditional_routes() {
+    let artifact = inline_artifact(
+        "reassigned-actor-enum-selector",
+        r#"
+            state S { int count; }
+            actor enum Move { A; B; }
+            actor A owns S {
+                entry choose(bool choose_a) emits next: Move {
+                    Move target = Move::B;
+                    if (choose_a) { target = Move::A; }
+                    require(!choose_a || target == Move::A);
+                    unrestricted(next.value);
+                    become next <- target(S { count: count + 1 });
+                }
+                entry fixed() emits next: Move {
+                    Move target = Move::B;
+                    unrestricted(next.value);
+                    become next <- target(S { count: count + 1 });
+                }
+            }
+            actor B owns S { entry inspect() emits none { require(count >= 0); } }
+            app Test { actor A; actor B; }
+        "#,
+    );
+    let builder = TxBuilder::new(&artifact).expect("builder accepts selector artifact");
+    let covenant_id = Hash::from_bytes([0x75; 32]);
+    let outpoint = TransactionOutpoint { transaction_id: TransactionId::from_bytes([0x76; 32]), index: 0 };
+    let initial = state! { count: 1 };
+    let next = state! { count: 2 };
+    let input_utxo = builder.covenant_utxo("A", initial.clone(), 1_000, 0, false, Some(covenant_id)).expect("A input builds");
+    let fixed_context = TxContext::new().actor_input("A", initial, "fixed", outpoint, input_utxo.clone(), 0).actor_output(
+        "B",
+        next.clone(),
+        CovenantBinding::new(0, covenant_id),
+        1_000,
+    );
+    let baseline = builder.build(&fixed_context).expect("an unwritten selector still resolves its witness automatically");
+    let redeem_script = p2sh_redeem_script(&baseline.inputs[0].signature_script);
+    let contract = artifact.sil_abi.contract("A").expect("A contract");
+    let choose = contract.entry("choose").expect("choose ABI");
+
+    // Body-local dynamic selectors need explicit ABI witnesses; the high-level
+    // builder does not evaluate entry bodies to infer their selected actor.
+    for choose_a in [false, true] {
+        for output_actor in ["A", "B"] {
+            let template = sil_template(artifact.sil_abi.contract(output_actor).expect("output contract"));
+            let entry_sigscript = encode_entry_sig_script(
+                &artifact.sil_abi,
+                "A",
+                contract,
+                "choose",
+                choose,
+                &[ArtifactValue::Bool(choose_a), ArtifactValue::Bytes(template.prefix), ArtifactValue::Bytes(template.suffix)],
+            )
+            .expect("explicit selector witness encodes");
+            let output = builder
+                .covenant_utxo(output_actor, next.clone(), 1_000, 0, false, Some(covenant_id))
+                .expect("output actor state builds");
+            let mut tx = baseline.clone();
+            tx.outputs[0].script_public_key = output.script_public_key;
+            tx.inputs[0].signature_script =
+                pay_to_script_hash_signature_script_with_flags(redeem_script.clone(), entry_sigscript, covenant_engine_flags())
+                    .expect("selector P2SH signature script builds");
+            let result = execute_input_with_covenants(&tx, vec![input_utxo.clone()], 0);
+            let expected = if choose_a { "A" } else { "B" };
+            assert_eq!(result.is_ok(), output_actor == expected, "choose_a={choose_a}, output={output_actor}: {result:?}");
+        }
+    }
+    let dynamic = &entry_artifact(&artifact, "A", "choose").template_selectors[0];
+    assert_eq!(dynamic.fixed_actor, None);
+    assert_eq!(dynamic.variants, ["A", "B"]);
+    let fixed = &entry_artifact(&artifact, "A", "fixed").template_selectors[0];
+    assert_eq!(fixed.fixed_actor.as_deref(), Some("B"));
 }
 
 #[test]
@@ -3614,9 +3712,12 @@ fn observed_self_merge_actor_composes_with_its_defining_app() {
             "controller_app.ag" => include_str!("../../tests/fixtures/runtime/context_observed_self_merge/CtrlAppImport.sil"),
             _ => unreachable!("the test lists every controller fixture"),
         };
-        assert_eq!(controller_sil, expected_controller_sil);
+        assert_eq!(fixture_ast(&controller_sil), fixture_ast(expected_controller_sil));
         let asset_sil = fs::read_to_string(out_dir.join("apps/AssetApp/sil/Asset.sil")).expect("generated dependency Sil exists");
-        assert_eq!(asset_sil, include_str!("../../tests/fixtures/runtime/context_observed_self_merge/Asset.sil"));
+        assert_eq!(
+            fixture_ast(&asset_sil),
+            fixture_ast(include_str!("../../tests/fixtures/runtime/context_observed_self_merge/Asset.sil"))
+        );
 
         let signer = keypair_from_byte(0x41);
         let signer_pk = signer.x_only_public_key().0.serialize().to_vec();
@@ -4143,8 +4244,7 @@ fn selected_app_artifact(input: &str, app: &str, name: &str) -> Artifact {
     if out_dir.exists() {
         fs::remove_dir_all(&out_dir).expect("old temp dir removed");
     }
-    let program = load_program(PathBuf::from(input).as_path()).expect("fixture source loads");
-    emit_build_app_linked(&program, app, &BTreeMap::new(), &out_dir).expect("selected app artifact builds");
+    crate::build_file_app(input, app, &out_dir).expect("selected app artifact builds");
     let json = fs::read_to_string(out_dir.join("artifact.json")).expect("artifact json exists");
     let artifact = serde_json::from_str(&json).expect("artifact deserializes");
     fs::remove_dir_all(out_dir).expect("temp build dir removed");

@@ -4,6 +4,33 @@ This document records the current internal architecture of the Argent
 compiler. It describes established compiler boundaries and invariants. It will
 grow as other compiler areas become stable enough to document.
 
+## Overview
+
+```mermaid
+flowchart TD
+    API["lib.rs build APIs<br/>Start the build"]
+    SRC["SourceSet<br/>Load source text and imports"]
+    AST["syntax::Program<br/>Parse each source once"]
+    RES["ResolvedModules<br/>Match each name to its definition"]
+    GRAPH["AppGraphPlanner<br/>Find app dependencies and build order"]
+    LINK["LinkedContext<br/>Check results from dependent apps"]
+    MODEL["AppCompilationContext<br/>Plan types, routes, inputs, outputs, and state"]
+    LOW["ContractLowerer<br/>Make one contract tree for each actor"]
+    ANN["AnnotatedContractAst<br/>Retain comment anchors beside the contract tree"]
+    FMT["Sil formatter<br/>Format .sil without comments"]
+    CMP["CompiledActors<br/>Compile with placeholder values<br/>Compile again with known route values if needed"]
+    ART["codegen::artifact<br/>Combine the plans and compiled results"]
+    WRITE["codegen::emitter<br/>Write the output files"]
+    API --> SRC --> AST --> RES
+    RES -->|File app| GRAPH
+    RES -->|No app graph| MODEL
+    GRAPH -->|For each app, dependencies first| LINK --> MODEL
+    MODEL --> LOW
+    LOW --> ANN --> FMT --> WRITE
+    ANN --> CMP --> ART --> WRITE
+    MODEL --> ART
+```
+
 ## State layout and lowering
 
 Argent separates user-authored state from the state that a generated contract
@@ -73,12 +100,12 @@ storage      ────route lowering────>  physical state
 
 Each relation is an identity or a transformation.
 
-| Case | Source to storage | Storage to physical |
-| --- | --- | --- |
-| Ordinary state, no route fields | Identity | Identity |
-| Expanded state, no route fields | Transformation | Identity |
-| Ordinary state with route fields | Identity | Augmented |
-| Expanded state with route fields | Transformation | Augmented |
+| Case                             | Source to storage | Storage to physical |
+| -------------------------------- | ----------------- | ------------------- |
+| Ordinary state, no route fields  | Identity          | Identity            |
+| Expanded state, no route fields  | Transformation    | Identity            |
+| Ordinary state with route fields | Identity          | Augmented           |
+| Expanded state with route fields | Transformation    | Augmented           |
 
 An identity between storage and physical state does not make physical `State`
 an authored value. An expanded state without route fields is the main example.
@@ -255,11 +282,11 @@ validation builtin.
 
 Physical materialization and template authentication are independent.
 
-| Available template proof | Output builtin |
-| --- | --- |
-| Current template | `validateOutputState` |
+| Available template proof  | Output builtin                         |
+| ------------------------- | -------------------------------------- |
+| Current template          | `validateOutputState`                  |
 | Authenticated bound input | `validateOutputStateWithInputTemplate` |
-| Explicit template witness | `validateOutputStateWithTemplate` |
+| Explicit template witness | `validateOutputStateWithTemplate`      |
 
 Each builtin receives a complete physical state value. The target layout plan
 selects its physical type. The proof plan selects the builtin and its template
@@ -293,14 +320,17 @@ The implementation divides this work across these modules:
 - `src/compiler/codegen/sil/state_boundary.rs` owns authenticated input
   projection, authored reconstruction, output materialization, template-proof
   selection, and exact preservation.
-- `src/compiler/codegen/sil/state_values.rs` plans state-valued signatures,
-  bindings, and array shapes.
+- `src/compiler/model/types.rs` plans state-valued signatures, bindings,
+  arrays, and authored expression provenance before lowering.
 - `src/compiler/codegen/sil/state_types.rs` applies checked Silverscript AST
   edits to authored type and constructor positions.
 - `src/compiler/codegen/sil/body.rs` preserves source control-flow order and
   requests typed boundary operations.
-- `src/compiler/codegen/emitter.rs` emits contract declarations, entries, and
-  artifacts from the completed plans.
+- `src/compiler/codegen/sil/contract.rs` constructs generated contract ASTs.
+- `src/compiler/codegen/compile.rs` retains final ASTs for base and context
+  compilation and formatted Sil output.
+- `src/compiler/codegen/emitter.rs` writes Sil, manifests, and artifacts from
+  the completed plans.
 
 Physical layout knowledge is limited to layout planning, the state boundary,
 contract declaration emission, artifact emission, and runtime physical-state
@@ -345,3 +375,15 @@ also cover:
 The main focused fixtures are under `tests/fixtures/state_layout/`.
 `./check.sh --full` regenerates the tracked Argent examples. The Argent
 Playground check runs the transaction flows.
+
+## Generated Sil output
+
+Each actor is lowered to one final contract AST. `CompiledActors` retains that
+tree for compilation, and the Sil formatter uses the same tree for generated
+source output.
+
+The pinned Sil AST has no comment nodes. `AnnotatedContractAst` therefore keeps
+generated explanations separately, anchored to contract nodes. This preserves
+their attachment for future comment-aware formatting without reparsing
+generated Sil. Today's formatter ignores the anchors and emits comment-free
+Sil; the comments do not participate in compilation.
