@@ -2553,6 +2553,60 @@ fn digest_accepts_scalar_state_results_from_global_and_actor_functions_once() {
 }
 
 #[test]
+fn covenant_output_temporaries_include_group_names() {
+    for observed in [true, false] {
+        for augmented in [false, true] {
+            for local_state in [false, true] {
+                let arguments = if observed { "cov_id left_id, cov_id right_id" } else { "" };
+                // Also cover distinct group names that become identical in snake case.
+                let (left, right) = if augmented { ("leftSide", "left_side") } else { ("left", "right") };
+                let mut clauses = String::new();
+                let mut body = String::new();
+                for (group, id, count) in [(left, "left_id", 1), (right, "right_id", 2)] {
+                    clauses.push_str(&if observed {
+                        format!("observes {group} by {id} {{ inputs {{ current: Counter, }} outputs {{ next: Counter, }} }}")
+                    } else {
+                        body.push_str(&format!("unrestricted({group}.outputs.next.value);"));
+                        format!("spawns {group} by {id} {{ outputs {{ next: Counter, }} }}")
+                    });
+                    let mut state =
+                        if observed { format!("state({group}.inputs.current)") } else { format!("CounterState {{ count: {count} }}") };
+                    if local_state {
+                        body.push_str(&format!("CounterState {group}_state = {state};"));
+                        state = format!("{group}_state");
+                    }
+                    body.push_str(&format!("require {group}.outputs become {{ next <- Counter({state}), }};"));
+                }
+                let reset = if augmented {
+                    "entry reset() emits next: Coordinator {
+                        unrestricted(next.value);
+                        become next <- Coordinator(CoordinatorState { nonce: count });
+                    }"
+                } else {
+                    ""
+                };
+                let source = format!(
+                    r#"
+                        state CounterState {{ int count; }}
+                        state CoordinatorState {{ int nonce; }}
+                        actor Counter owns CounterState {{
+                            entry hold() emits none {{ require(count >= 0); }}
+                            {reset}
+                        }}
+                        actor Coordinator owns CoordinatorState {{
+                            entry preserve({arguments}) {clauses} emits none {{ {body} }}
+                        }}
+                        app Example {{ actor Counter; actor Coordinator; }}
+                    "#,
+                );
+                crate::compile_inline("counter-groups.ag", source)
+                    .unwrap_or_else(|err| panic!("observed={observed}, augmented={augmented}, local_state={local_state}: {err}"));
+            }
+        }
+    }
+}
+
+#[test]
 fn observed_state_reference_can_supply_a_matching_route_state() {
     let (actor_sil, _) = inline_actor_sil_and_artifact(
         "observed-state-route-source",
@@ -2609,7 +2663,7 @@ fn observed_state_reference_can_supply_a_matching_route_state() {
         .and_then(|tail| tail.split_once("entry forward").map(|(body, _)| body))
         .expect("relay entry is delimited in the generated Sil");
     let authored = relay
-        .split_once("ForeignState gen__source_dst_foreign_state = ForeignState {")
+        .split_once("ForeignState gen__source_asset_dst_foreign_state = ForeignState {")
         .map(|(_, tail)| tail)
         .and_then(|tail| tail.split_once("};").map(|(body, _)| body))
         .expect("relay reconstructs one authored ForeignState");
@@ -2623,7 +2677,7 @@ fn observed_state_reference_can_supply_a_matching_route_state() {
     assert!(relay.contains("gen__peer_template: gen__peer_template,"), "{relay}");
     assert!(!relay.contains("gen__asset_src_state.gen__foreign_template"), "{relay}");
     assert!(!relay.contains("gen__asset_src_state.gen__peer_template"), "{relay}");
-    assert!(relay.contains("validateOutputState(gen__asset_dst_output_idx, gen__state_dst_state);"), "{relay}");
+    assert!(relay.contains("validateOutputState(gen__asset_dst_output_idx, gen__state_asset_dst_state);"), "{relay}");
 }
 
 #[test]

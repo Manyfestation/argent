@@ -2069,7 +2069,8 @@ impl<'a, 'm, 'p> BodyLowerer<'a, 'm, 'p> {
                     *name = target.authored_sil_type().to_string();
                 }
                 let source_name = format!(
-                    "{RESERVED_GENERATED_PREFIX}source_{}_{}",
+                    "{RESERVED_GENERATED_PREFIX}source_{}_{}_{}",
+                    context.group_name(),
                     to_snake(context.output_name()),
                     to_snake(target.source_identity())
                 );
@@ -2160,7 +2161,12 @@ impl<'a, 'm, 'p> BodyLowerer<'a, 'm, 'p> {
             self.entry_id,
             self.entry,
             validation_context,
-            format!("{RESERVED_GENERATED_PREFIX}state_{}_{}", to_snake(context.output_name()), to_snake(target.physical_type())),
+            format!(
+                "{RESERVED_GENERATED_PREFIX}state_{}_{}_{}",
+                context.group_name(),
+                to_snake(context.output_name()),
+                to_snake(target.physical_type())
+            ),
             self.model,
         )
         .ok()?;
